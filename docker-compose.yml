@@ -1,0 +1,107 @@
+volumes:
+  postgres-data:
+    driver: local
+  kestra-data:
+    driver: local
+  python-kestra-code: {}     # volume para receber o código do Git
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: kestra
+      POSTGRES_USER: kestra
+      POSTGRES_PASSWORD: k3str4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  kestra:
+    image: kestra/kestra:v0.24.0
+    pull_policy: always
+    user: "root"
+    command: server standalone
+    volumes:
+      - kestra-data:/app/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/kestra-wd:/tmp/kestra-wd
+    environment:
+      KESTRA_CONFIGURATION: |
+        datasources:
+          postgres:
+            url: jdbc:postgresql://postgres:5432/kestra
+            driverClassName: org.postgresql.Driver
+            username: kestra
+            password: k3str4
+        kestra:
+          server:
+            basicAuth:
+              enabled: false
+              username: "admin@localhost.dev" 
+              password: kestra
+            baseUrl: "https://kestra.gustavo-gestor.shop/"
+          repository:
+            type: postgres
+          storage:
+            type: local
+            local:
+              basePath: "/app/storage"
+          queue:
+            type: postgres
+          tasks:
+            tmpDir:
+              path: /tmp/kestra-wd/tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # 1) Clona o repositório para o volume /code
+  python-kestra-git:
+    image: alpine:3.20
+    volumes:
+      - python-kestra-code:/code
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        set -e
+        apk add --no-cache git ca-certificates >/dev/null
+        rm -rf /code/* /code/.* 2>/dev/null || true
+        git clone --depth=1 https://github.com/gustavo-tekeezy/kestra /code
+        git -C /code checkout -q main || true
+        echo done > /code/.git-ready
+    restart: "no"
+
+  # 2) Constrói a imagem usando o Docker do host
+  python-kestra-build:
+    image: docker:26-cli
+    volumes:
+      - python-kestra-code:/code
+      - /var/run/docker.sock:/var/run/docker.sock   # acesso ao Docker do host (necessário para build)
+    depends_on:
+      python-kestra-git:
+        condition: service_completed_successfully
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        while [ ! -f /code/.git-ready ]; do sleep 2; done
+        docker build -t meu-python-kestra:latest /code
+    restart: "no"
+
+  # 3) Sobe a instância da imagem construída
+  meu-python-kestra:
+    image: meu-python-kestra:latest
+    depends_on:
+      python-kestra-build:
+        condition: service_completed_successfully
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        python -c "import requests, kestra; print('meu-python-kestra pronto')"
+    restart: unless-stopped
