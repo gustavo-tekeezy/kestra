@@ -3,7 +3,6 @@ volumes:
     driver: local
   kestra-data:
     driver: local
-  python-kestra-code: {}     # volume para receber o código do Git
 
 services:
   postgres:
@@ -59,49 +58,29 @@ services:
       postgres:
         condition: service_healthy
 
-  # 1) Clona o repositório para o volume /code
-  python-kestra-git:
-    image: alpine:3.20
+  # Launcher: clona do Git, faz build e sobe o container final
+  python-kestra-launcher:
+    image: docker:26-cli
     volumes:
-      - python-kestra-code:/code
+      - /var/run/docker.sock:/var/run/docker.sock   # acesso ao Docker do host (necessário p/ build/run)
     command:
       - /bin/sh
       - -lc
       - |
         set -e
         apk add --no-cache git ca-certificates >/dev/null
-        rm -rf /code/* /code/.* 2>/dev/null || true
-        git clone --depth=1 https://github.com/gustavo-tekeezy/kestra /code
-        git -C /code checkout -q main || true
-        echo done > /code/.git-ready
-    restart: "no"
+        # pasta temporária para o código
+        rm -rf /tmp/kestra-code && mkdir -p /tmp/kestra-code
+        git clone --depth=1 https://github.com/gustavo-tekeezy/kestra /tmp/kestra-code
+        git -C /tmp/kestra-code checkout -q main || true
 
-  # 2) Constrói a imagem usando o Docker do host
-  python-kestra-build:
-    image: docker:26-cli
-    volumes:
-      - python-kestra-code:/code
-      - /var/run/docker.sock:/var/run/docker.sock   # acesso ao Docker do host (necessário para build)
-    depends_on:
-      python-kestra-git:
-        condition: service_completed_successfully
-    command:
-      - /bin/sh
-      - -lc
-      - |
-        while [ ! -f /code/.git-ready ]; do sleep 2; done
-        docker build -t meu-python-kestra:latest /code
-    restart: "no"
+        # build da imagem local
+        docker build -t meu-python-kestra:latest /tmp/kestra-code
 
-  # 3) Sobe a instância da imagem construída
-  meu-python-kestra:
-    image: meu-python-kestra:latest
-    depends_on:
-      python-kestra-build:
-        condition: service_completed_successfully
-    command:
-      - /bin/sh
-      - -lc
-      - |
-        python -c "import requests, kestra; print('meu-python-kestra pronto')"
-    restart: unless-stopped
+        # recria o container final (fora do Compose)
+        docker rm -f meu-python-kestra 2>/dev/null || true
+        docker run -d --name meu-python-kestra --restart unless-stopped meu-python-kestra:latest \
+          sh -lc "python -c \"import requests, kestra; print('meu-python-kestra pronto')\""
+
+        echo "Build & Run OK"
+    restart: "no"
