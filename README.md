@@ -1,1 +1,2 @@
-# kestra
+Não comita nada aqui a não ser os arquivos que ja estão aqui...
+Pelo Kestra da pra subir arquivo e fazer as paradas td por la

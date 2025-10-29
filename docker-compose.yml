@@ -40,7 +40,7 @@ services:
           server:
             basicAuth:
               enabled: false
-              username: "admin@localhost.dev" 
+              username: "admin@localhost.dev"
               password: kestra
             baseUrl: "https://kestra.gustavo-gestor.shop/"
           repository:
@@ -58,29 +58,27 @@ services:
       postgres:
         condition: service_healthy
 
-  # Launcher: clona do Git, faz build e sobe o container final
   python-kestra-launcher:
     image: docker:26-cli
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock   # acesso ao Docker do host (necessário p/ build/run)
+      - /var/run/docker.sock:/var/run/docker.sock
     command:
       - /bin/sh
       - -lc
       - |
         set -e
         apk add --no-cache git ca-certificates >/dev/null
-        # pasta temporária para o código
-        rm -rf /tmp/kestra-code && mkdir -p /tmp/kestra-code
-        git clone --depth=1 https://github.com/gustavo-tekeezy/kestra /tmp/kestra-code
-        git -C /tmp/kestra-code checkout -q main || true
-
-        # build da imagem local
+        rm -rf /tmp/kestra-code
+        mkdir -p /tmp/kestra-code
+        if [ -d /tmp/kestra-code/.git ]; then
+          git -C /tmp/kestra-code fetch -q --all
+          git -C /tmp/kestra-code reset -q --hard origin/main
+        else
+          git clone --depth=1 https://github.com/gustavo-tekeezy/kestra /tmp/kestra-code
+          git -C /tmp/kestra-code checkout -q main || true
+        fi
         docker build -t meu-python-kestra:latest /tmp/kestra-code
-
-        # recria o container final (fora do Compose)
         docker rm -f meu-python-kestra 2>/dev/null || true
-        docker run -d --name meu-python-kestra --restart unless-stopped meu-python-kestra:latest \
-          sh -lc "python -c \"import requests, kestra; print('meu-python-kestra pronto')\""
-
-        echo "Build & Run OK"
+        docker run -d --name meu-python-kestra --restart unless-stopped meu-python-kestra:latest sh -lc 'python -c "import requests, kestra; print(\"meu-python-kestra pronto\")"; exec tail -f /dev/null'
+        echo Build\ \&\ Run\ OK
     restart: "no"
